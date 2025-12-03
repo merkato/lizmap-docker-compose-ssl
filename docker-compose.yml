@@ -21,7 +21,7 @@ services:
 
   # --- 2. Lizmap Web Client (Aplikacja) ---
   lizmap:
-    image: 3liz/lizmap-web-client:${LIZMAP_VERSION_TAG:-3.8}
+    image: 3liz/lizmap-web-client:${LIZMAP_VERSION_TAG:-3.9}
     restart: unless-stopped
     environment:
       LIZMAP_CACHEMODE: "${LIZMAP_CACHEMODE:-sqlite}"
