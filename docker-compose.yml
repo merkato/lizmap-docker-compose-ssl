@@ -31,9 +31,9 @@ services:
       LIZMAP_DB_PASSWORD: "${LIZMAP_DB_PASSWORD:-postgres}"
       LIZMAP_DB_NAME: "${LIZMAP_DB_NAME:-postgres}"
     volumes:
-      - ${LIZMAP_DIR}/instances:/var/www/lizmap-web-client/lizmap/var/instances
-      - ${LIZMAP_DIR}/var:/var/www/lizmap-web-client/lizmap/var
-      - ${LIZMAP_DIR}/www:/var/www/lizmap-web-client/lizmap/www
+      - ${LIZMAP_DIR}/instances:/www/lizmap/instances
+      - ${LIZMAP_DIR}/var:/www/lizmap/var
+      - ${LIZMAP_DIR}/www://www/lizmap/www
     depends_on:
       - postgis
       - wps
@@ -49,8 +49,8 @@ services:
     expose:
       - 80 
     volumes:
-      - ${LIZMAP_DIR}/instances:/var/www/lizmap-web-client/lizmap/var/instances
-      - ${LIZMAP_DIR}/www:/var/www/lizmap-web-client/lizmap/www
+      - ${LIZMAP_DIR}/instances:/www/lizmap/var/instances
+      - ${LIZMAP_DIR}/www:/www/lizmap/www
       - ./etc/nginx/conf.d:/etc/nginx/conf.d
     depends_on:
       - lizmap
