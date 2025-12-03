@@ -1,6 +1,6 @@
 services:
 
-  # --- DODANO: Nginx Proxy Manager (Obsługa SSL) ---
+  # --- NOWA SEKCJA: Nginx Proxy Manager ---
   npm:
     image: 'jc21/nginx-proxy-manager:latest'
     container_name: nginx-proxy-manager
@@ -8,7 +8,7 @@ services:
     ports:
       - '80:80'     # Publiczny HTTP
       - '443:443'   # Publiczny HTTPS
-      - '81:81'     # Panel administracyjny
+      - '81:81'     # Panel Administracyjny
     environment:
       DB_SQLITE_FILE: "/data/database.sqlite"
     volumes:
@@ -19,7 +19,7 @@ services:
     networks:
       - lizmap-net
 
-  # --- STANDARDOWE USŁUGI 3LIZ ---
+  # --- ORYGINALNE USŁUGI 3LIZ (Zmodyfikowane) ---
   lizmap:
     image: 3liz/lizmap-web-client:${LIZMAP_VERSION_TAG:-3.8}
     restart: unless-stopped
@@ -44,14 +44,13 @@ services:
   web:
     image: nginx:alpine
     restart: unless-stopped
-    # ZMIANA: Zamiast 'ports' używamy 'expose', aby port był widoczny tylko dla NPM
+    # ZMIANA: expose zamiast ports. Ukrywamy port 80 przed światem, widzi go tylko NPM.
     expose:
       - 80
     volumes:
       - ${LIZMAP_DIR}/instances:/var/www/lizmap-web-client/lizmap/var/instances
       - ${LIZMAP_DIR}/www:/var/www/lizmap-web-client/lizmap/www
-      # Używamy standardowej konfiguracji nginx dostarczanej przez repozytorium (jeśli istnieje)
-      # lub domyślnej z obrazu, mapując tylko kod strony
+      # Mapowanie konfiguracji z repozytorium
       - ./etc/nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - lizmap
@@ -59,7 +58,7 @@ services:
       - lizmap-net
 
   postgis:
-    image: 3liz/postgis:${POSTGIS_VERSION_TAG:-15-3.3}
+    image: 3liz/postgis:${POSTGIS_VERSION_TAG:-17-3}
     restart: unless-stopped
     volumes:
       - postgis-data:/var/lib/postgresql/data
@@ -67,12 +66,12 @@ services:
       POSTGRES_PASSWORD: "${LIZMAP_DB_PASSWORD:-postgres}"
       POSTGRES_USER: "${LIZMAP_DB_USER:-postgres}"
       POSTGRES_DB: "${LIZMAP_DB_NAME:-postgres}"
-    # ZMIANA: Usunięto sekcję ports (baza dostępna tylko wewnątrz Dockera)
+    # ZMIANA: Usunięto sekcję ports całkowicie (Baza tylko wewnętrzna)
     networks:
       - lizmap-net
 
   qgis-server:
-    image: 3liz/qgis-map-server:${QGIS_VERSION_TAG:-3.22}
+    image: 3liz/qgis-map-server:${QGIS_VERSION_TAG:-3.34}
     restart: unless-stopped
     environment:
       QGSRV_SERVER_WORKERS: "${QGSRV_SERVER_WORKERS:-1}"
@@ -86,7 +85,7 @@ services:
       - lizmap-net
 
   wps:
-    image: 3liz/qgis-wps:${QGIS_VERSION_TAG:-3.22}
+    image: 3liz/qgis-wps:${QGIS_VERSION_TAG:-3.34}
     restart: unless-stopped
     environment:
       QGSRV_SERVER_WORKERS: "${QGSRV_SERVER_WORKERS:-1}"
