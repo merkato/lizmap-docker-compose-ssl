@@ -1,115 +1,108 @@
+version: '3.8'
+
 services:
-  lizmap:
-    image: 3liz/lizmap-web-client:${LIZMAP_VERSION_TAG}
-    environment:
-      LIZMAP_CACHEREDISDB: '1'
-      LIZMAP_CACHEREDISHOST: redis
-      LIZMAP_CACHESTORAGETYPE: redis
-      LIZMAP_HOME: /srv/lizmap
-      LIZMAP_USER: ${LIZMAP_UID}
-      LIZMAP_WMSSERVERURL: http://map:8080/ows/
-      LIZMAP_CONFIG_INCLUDE: /srv/etc
-      PGSERVICEFILE: /srv/etc/pg_service.conf
-      PGPASSFILE: /srv/etc/pgpass.conf
-    volumes:
-      - { type: bind, source: "${LIZMAP_PROJECTS}", target: /srv/projects }
-      - { type: bind, source: "${LIZMAP_DIR}/var/lizmap-theme-config", target: /www/lizmap/var/lizmap-theme-config }
-      - { type: bind, source: "${LIZMAP_DIR}/var/lizmap-config", target: /www/lizmap/var/config }
-      - { type: bind, source: "${LIZMAP_DIR}/var/lizmap-db",     target: /www/lizmap/var/db }
-      - { type: bind, source: "${LIZMAP_DIR}/var/lizmap-log",     target: /www/lizmap/var/log }
-      - { type: bind, source: "${LIZMAP_DIR}/www", target: /www/lizmap/www }
-      - { type: bind, source: "${LIZMAP_DIR}/var/lizmap-modules", target: /www/lizmap/lizmap-modules }
-      - { type: bind, source: "${LIZMAP_DIR}/var/lizmap-my-packages", target: /www/lizmap/my-packages }
-      - { type: bind, source: "${LIZMAP_DIR}/cache", target: /srv/cache }
-      - { type: bind, source: "${LIZMAP_DIR}/etc", target: /srv/etc, read_only: true }
-    command:
-      - php-fpm
-    depends_on:
-      postgis:
-        condition: service_healthy
-      redis:
-        condition: service_started
-      map:
-        condition: service_started
+
+  # --- 1. Nginx Proxy Manager (Bramka HTTPS) ---
+  npm:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: nginx-proxy-manager
     restart: unless-stopped
-    healthcheck:
-        test: ["CMD-SHELL", "php-fpm-healthcheck || exit 1"]
-        interval: 30s
-        timeout: 30s
-        start_interval: 2s
-        start_period: 10s
-  map:
-    image: 3liz/qgis-map-server:${QGIS_VERSION_TAG}
-    environment:
-      3LIZ_SKIP_STATS: 1
-      GDAL_CACHEMAX: 2048
-      PGSERVICEFILE: /srv/etc/pg_service.conf
-      PGSPASSFILE: /srv/etc/pgpass.conf
-      QGIS_OPTIONS_PATH: /srv/etc/qgis
-      QGIS_SERVER_LIZMAP_REVEAL_SETTINGS: 'yes'
-      QGIS_SERVER_TRUST_LAYER_METADATA: 'True'
-      QGIS_SERVER_FORCE_READONLY_LAYERS: 'True'
-      QGIS_SERVER_APPLICATION_NAME: 'QGIS Server LTR'
-      QGSRV_API_ENABLED_LIZMAP: 'yes'
-      QGSRV_CACHE_SIZE: '20'
-      QGSRV_CACHE_STRICT_CHECK: 'no'
-      QGSRV_CACHE_ROOTDIR: /srv/projects
-      QGSRV_LOGGING_LEVEL: DEBUG
-      QGSRV_USER: ${LIZMAP_UID}:${LIZMAP_GID}
-      QGSRV_SERVER_PLUGINPATH: /srv/plugins
-      QGSRV_SERVER_RESTARTMON: /srv/.qgis-restart
-      QGSRV_SERVER_WORKERS: ${QGIS_MAP_WORKERS}
-      QGSRV_SERVER_TIMEOUT: 30
-    volumes:
-      - { type: bind, source: "${LIZMAP_PROJECTS}", target: /srv/projects }
-      - { type: bind, source: "${LIZMAP_DIR}/plugins", target: /srv/plugins }
-      - { type: bind, source: "${LIZMAP_DIR}/wps-data", target: /srv/data }
-      - { type: bind, source: "${LIZMAP_DIR}/etc", target: /srv/etc, read_only: true }
     ports:
-      - ${OWS_PORT}:8080
-    restart: unless-stopped
-  redis:
-    image: redis:7-alpine
+      - '80:80'     # Publiczny port HTTP (wymagany do generowania certyfikatów)
+      - '443:443'   # Publiczny port HTTPS
+      - '81:81'     # Port panelu administracyjnego NPM
+    environment:
+      DB_SQLITE_FILE: "/data/database.sqlite"
     volumes:
-      - { type: volume, source: redis_data, target: /data }
+      - ./npm-data:/data
+      - ./npm-letsencrypt:/etc/letsencrypt
+    depends_on:
+      - web
+    networks:
+      - lizmap-net
+
+  # --- 2. Lizmap Web Client (Aplikacja) ---
+  lizmap:
+    image: 3liz/lizmap-web-client:${LIZMAP_VERSION_TAG:-3.8}
+    restart: unless-stopped
+    environment:
+      LIZMAP_CACHEMODE: "${LIZMAP_CACHEMODE:-sqlite}"
+      LIZMAP_DB_HOST: "${LIZMAP_DB_HOST:-postgis}"
+      LIZMAP_DB_PORT: "${LIZMAP_DB_PORT:-5432}"
+      LIZMAP_DB_USER: "${LIZMAP_DB_USER:-postgres}"
+      LIZMAP_DB_PASSWORD: "${LIZMAP_DB_PASSWORD:-postgres}"
+      LIZMAP_DB_NAME: "${LIZMAP_DB_NAME:-postgres}"
+    volumes:
+      - ${LIZMAP_DIR}/instances:/var/www/lizmap-web-client/lizmap/var/instances
+      - ${LIZMAP_DIR}/var:/var/www/lizmap-web-client/lizmap/var
+      - ${LIZMAP_DIR}/www:/var/www/lizmap-web-client/lizmap/www
+    depends_on:
+      - postgis
+      - wps
+    networks:
+      - lizmap-net
+
+  # --- 3. Serwer WWW dla Lizmap (Wewnętrzny) ---
   web:
     image: nginx:alpine
-    user: ${LIZMAP_UID}:${LIZMAP_GID}
+    restart: unless-stopped
+    # WAŻNA ZMIANA: Usuwamy sekcję "ports", aby nie wystawiać Lizmapa bezpośrednio.
+    # Używamy "expose", aby port był widoczny tylko dla NPM wewnątrz Dockera.
+    expose:
+      - 80 
     volumes:
-      - { type: bind, source: "${LIZMAP_DIR}/etc/nginx.conf", target: /etc/nginx/nginx.conf }
-      - { type: bind, source: "${LIZMAP_DIR}/var/log/nginx", target: /var/log/nginx }
-      - { type: bind, source: "${LIZMAP_DIR}/var/nginx-cache", target: /var/cache/nginx }
-      - { type: bind, source: "${LIZMAP_DIR}", target: /srv/lizmap }
-    ports:
-      - ${LIZMAP_PORT}:8080
+      - ${LIZMAP_DIR}/instances:/var/www/lizmap-web-client/lizmap/var/instances
+      - ${LIZMAP_DIR}/www:/var/www/lizmap-web-client/lizmap/www
+      - ./etc/nginx/conf.d:/etc/nginx/conf.d
     depends_on:
-      lizmap:
-        condition: service_healthy
-  postgis:
-    image: 3liz/postgis:${POSTGIS_VERSION}
-    volumes:
-      - { type: volume, source: postgis_data, target: /var/lib/postgresql/data }
-      - { type: bind, source: "${LIZMAP_DIR}/etc/postgres.init.d", target: /docker-entrypoint-initdb.d }
-    environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_LIZMAP_DB: ${POSTGRES_LIZMAP_DB}
-      POSTGRES_LIZMAP_USER: ${POSTGRES_LIZMAP_USER}
-      POSTGRES_LIZMAP_PASSWORD: ${POSTGRES_LIZMAP_PASSWORD}
-    ports:
-      - ${POSTGIS_PORT}:5432
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_LIZMAP_DB} -q || exit 1"]
-      interval: 30s
-      timeout: 30s
-      start_interval: 2s
-      start_period: 10s
+      - lizmap
     networks:
-      default:
-        aliases:
-          - ${POSTGIS_ALIAS}
+      - lizmap-net
+
+  # --- 4. QGIS Server ---
+  qgis-server:
+    image: 3liz/qgis-map-server:${QGIS_VERSION_TAG:-3.22}
+    restart: unless-stopped
+    environment:
+      QGSRV_SERVER_WORKERS: "${QGSRV_SERVER_WORKERS:-1}"
+      QGSRV_CACHE_SIZE: "${QGSRV_CACHE_SIZE:-20}"
+      QGSRV_LOGGING_LEVEL: "${QGSRV_LOGGING_LEVEL:-DEEP}"
+      QGSRV_USER: "${LIZMAP_USER_ID:-1000}:${LIZMAP_GROUP_ID:-1000}"
+    volumes:
+      - ${LIZMAP_DIR}/instances:/srv/projects
+      - ${LIZMAP_DIR}/wps-data:/srv/data
+    networks:
+      - lizmap-net
+
+  # --- 5. Baza danych PostGIS ---
+  postgis:
+    image: 3liz/postgis:${POSTGIS_VERSION_TAG:-14-3.3}
+    restart: unless-stopped
+    volumes:
+      - postgis-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: "${LIZMAP_DB_PASSWORD:-postgres}"
+      POSTGRES_USER: "${LIZMAP_DB_USER:-postgres}"
+      POSTGRES_DB: "${LIZMAP_DB_NAME:-postgres}"
+    networks:
+      - lizmap-net
+
+  # --- 6. WPS Service (Opcjonalny) ---
+  wps:
+    image: 3liz/qgis-wps:${QGIS_VERSION_TAG:-3.22}
+    restart: unless-stopped
+    environment:
+      QGSRV_SERVER_WORKERS: "${QGSRV_SERVER_WORKERS:-1}"
+      QGIS_PROJECT_FILE: "/srv/data/wps.qgs"
+    volumes:
+      - ${LIZMAP_DIR}/wps-data:/srv/data
+    networks:
+      - lizmap-net
 
 volumes:
-    postgis_data:
-        driver: local
-    redis_data:
-        driver: local
+  postgis-data:
+    driver: local
+
+networks:
+  lizmap-net:
+    driver: bridge
