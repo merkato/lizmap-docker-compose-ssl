@@ -1,15 +1,14 @@
-sversion: '3.8'
-
 services:
-  # --- 1. Nginx Proxy Manager ---
+
+  # --- DODANO: Nginx Proxy Manager (Obsługa SSL) ---
   npm:
     image: 'jc21/nginx-proxy-manager:latest'
     container_name: nginx-proxy-manager
     restart: unless-stopped
     ports:
-      - '80:80'
-      - '443:443'
-      - '81:81'
+      - '80:80'     # Publiczny HTTP
+      - '443:443'   # Publiczny HTTPS
+      - '81:81'     # Panel administracyjny
     environment:
       DB_SQLITE_FILE: "/data/database.sqlite"
     volumes:
@@ -20,130 +19,77 @@ services:
     networks:
       - lizmap-net
 
-  # --- 2. INIT CONTAINER (Naprawiony skrypt $$) ---
-  lizmap-init:
-    image: 3liz/lizmap-web-client:${LIZMAP_VERSION_TAG:-3.8}
-    user: root
-    volumes:
-      - ${LIZMAP_DIR}/lizmap:/host/lizmap
-    # Używamy $$ zamiast $ dla zmiennych wewnątrz skryptu
-    entrypoint: >
-      sh -c "
-      echo '--- START INITIALIZATION ---';
-      
-      init_dir() {
-        SRC=$$1
-        DEST=$$2
-        # Sprawdzamy czy katalog jest pusty
-        if [ -z \"$$(ls -A $$DEST 2>/dev/null)\" ]; then
-          echo \"Inicjalizacja $$DEST...\"
-          mkdir -p $$DEST
-          cp -Rn $$SRC/* $$DEST/
-        else
-          echo \"$$DEST nie jest pusty, pomijam kopiowanie.\"
-        fi
-      }
-
-      # 1. Kopiuj strukturę
-      # Ścieżka źródłowa w obrazie 3.8 to /var/www/lizmap-web-client/lizmap
-      init_dir /var/www/lizmap-web-client/lizmap/var /host/lizmap/var
-      init_dir /var/www/lizmap-web-client/lizmap/www /host/lizmap/www
-      
-      mkdir -p /host/lizmap/instances
-
-      # 2. Konfiguracja HTTPS
-      CONFIG_FILE=/host/lizmap/var/config/localconfig.ini.php
-      DIST_FILE=/host/lizmap/var/config/localconfig.ini.php.dist
-      
-      if [ ! -f $$CONFIG_FILE ] && [ -f $$DIST_FILE ]; then
-         echo 'Tworzenie localconfig.ini.php...'
-         cp $$DIST_FILE $$CONFIG_FILE
-      fi
-
-      if [ -f $$CONFIG_FILE ]; then
-         echo 'Wymuszanie HTTPS w konfiguracji...'
-         sed -i '/isHttps/d' $$CONFIG_FILE
-         sed -i '/\[main\]/a isHttps = 1' $$CONFIG_FILE
-      fi
-
-      # 3. Naprawa uprawnień
-      echo 'Naprawa uprawnień...'
-      chown -R 33:33 /host/lizmap
-      chmod -R 775 /host/lizmap
-      
-      echo '--- INIT COMPLETE ---'
-      "
-
-  # --- 3. Lizmap Web Client ---
+  # --- STANDARDOWE USŁUGI 3LIZ ---
   lizmap:
     image: 3liz/lizmap-web-client:${LIZMAP_VERSION_TAG:-3.8}
     restart: unless-stopped
     environment:
-      LIZMAP_CACHEMODE: "${LIZMAP_CACHEMODE}"
-      LIZMAP_DB_HOST: "${LIZMAP_DB_HOST}"
-      LIZMAP_DB_PORT: "${LIZMAP_DB_PORT}"
-      LIZMAP_DB_USER: "${LIZMAP_DB_USER}"
-      LIZMAP_DB_PASSWORD: "${LIZMAP_DB_PASSWORD}"
-      LIZMAP_DB_NAME: "${LIZMAP_DB_NAME}"
+      LIZMAP_CACHEMODE: "${LIZMAP_CACHEMODE:-sqlite}"
+      LIZMAP_DB_HOST: "${LIZMAP_DB_HOST:-postgis}"
+      LIZMAP_DB_PORT: "${LIZMAP_DB_PORT:-5432}"
+      LIZMAP_DB_USER: "${LIZMAP_DB_USER:-postgres}"
+      LIZMAP_DB_PASSWORD: "${LIZMAP_DB_PASSWORD:-postgres}"
+      LIZMAP_DB_NAME: "${LIZMAP_DB_NAME:-postgres}"
+      LIZMAP_WMSSERVER_URL: "${LIZMAP_WMSSERVER_URL:-http://lizmap:8080/ows/}"
     volumes:
-      - ${LIZMAP_DIR}/lizmap/instances:/var/www/lizmap-web-client/lizmap/instances
-      - ${LIZMAP_DIR}/lizmap/var:/var/www/lizmap-web-client/lizmap/var
-      - ${LIZMAP_DIR}/lizmap/www:/var/www/lizmap-web-client/lizmap/www
+      - ${LIZMAP_DIR}/instances:/var/www/lizmap-web-client/lizmap/var/instances
+      - ${LIZMAP_DIR}/var:/var/www/lizmap-web-client/lizmap/var
+      - ${LIZMAP_DIR}/www:/var/www/lizmap-web-client/lizmap/www
     depends_on:
-      lizmap-init:
-        condition: service_completed_successfully
-      postgis:
-        condition: service_started
-      wps:
-        condition: service_started
+      - postgis
+      - wps
     networks:
       - lizmap-net
 
-  # --- 4. Nginx ---
   web:
     image: nginx:alpine
     restart: unless-stopped
+    # ZMIANA: Zamiast 'ports' używamy 'expose', aby port był widoczny tylko dla NPM
     expose:
       - 80
     volumes:
-      - ${LIZMAP_DIR}/lizmap/www:/var/www/lizmap-web-client/lizmap/www
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+      - ${LIZMAP_DIR}/instances:/var/www/lizmap-web-client/lizmap/var/instances
+      - ${LIZMAP_DIR}/www:/var/www/lizmap-web-client/lizmap/www
+      # Używamy standardowej konfiguracji nginx dostarczanej przez repozytorium (jeśli istnieje)
+      # lub domyślnej z obrazu, mapując tylko kod strony
+      - ./etc/nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - lizmap
     networks:
       - lizmap-net
 
-  # --- 5. Baza i GIS ---
   postgis:
-    image: 3liz/postgis:${POSTGIS_VERSION_TAG:-17-3}
+    image: 3liz/postgis:${POSTGIS_VERSION_TAG:-15-3.3}
     restart: unless-stopped
     volumes:
       - postgis-data:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT_HOST:-25432}:5432"
     environment:
-      POSTGRES_PASSWORD: "${LIZMAP_DB_PASSWORD}"
-      POSTGRES_USER: "${LIZMAP_DB_USER}"
-      POSTGRES_DB: "${LIZMAP_DB_NAME}"
+      POSTGRES_PASSWORD: "${LIZMAP_DB_PASSWORD:-postgres}"
+      POSTGRES_USER: "${LIZMAP_DB_USER:-postgres}"
+      POSTGRES_DB: "${LIZMAP_DB_NAME:-postgres}"
+    # ZMIANA: Usunięto sekcję ports (baza dostępna tylko wewnątrz Dockera)
     networks:
       - lizmap-net
 
   qgis-server:
-    image: 3liz/qgis-map-server:${QGIS_VERSION_TAG:-3.34}
+    image: 3liz/qgis-map-server:${QGIS_VERSION_TAG:-3.22}
     restart: unless-stopped
     environment:
       QGSRV_SERVER_WORKERS: "${QGSRV_SERVER_WORKERS:-1}"
-      QGSRV_USER: "${LIZMAP_USER_ID}:${LIZMAP_GROUP_ID}"
+      QGSRV_CACHE_SIZE: "${QGSRV_CACHE_SIZE:-20}"
+      QGSRV_LOGGING_LEVEL: "${QGSRV_LOGGING_LEVEL:-DEEP}"
+      QGSRV_USER: "${LIZMAP_USER_ID:-1000}:${LIZMAP_GROUP_ID:-1000}"
     volumes:
-      - ${LIZMAP_DIR}/lizmap/instances:/srv/projects
+      - ${LIZMAP_DIR}/instances:/srv/projects
       - ${LIZMAP_DIR}/wps-data:/srv/data
     networks:
       - lizmap-net
 
   wps:
-    image: 3liz/qgis-wps:${QGIS_VERSION_TAG:-3.34}
+    image: 3liz/qgis-wps:${QGIS_VERSION_TAG:-3.22}
     restart: unless-stopped
     environment:
+      QGSRV_SERVER_WORKERS: "${QGSRV_SERVER_WORKERS:-1}"
       QGIS_PROJECT_FILE: "/srv/data/wps.qgs"
     volumes:
       - ${LIZMAP_DIR}/wps-data:/srv/data
