@@ -51,7 +51,7 @@ services:
       - ${LIZMAP_DIR}/instances:/var/www/lizmap-web-client/lizmap/var/instances
       - ${LIZMAP_DIR}/www:/var/www/lizmap-web-client/lizmap/www
       # Mapowanie konfiguracji z repozytorium
-      - ./etc/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./lizmap.dir/etc/nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - lizmap
     networks:
